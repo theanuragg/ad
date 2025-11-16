@@ -1,3 +1,4 @@
+
 'use client'
 
 import { useEffect, useState, useCallback } from "react";
@@ -18,6 +19,8 @@ type FeeMetrics = {
 };
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
+const MIN_CLAIM_USD = 1; // Minimum $1 to claim
+const SOL_PRICE_USD = 150; // Update with real-time price or fetch from an API
 
 export default function Home() {
   const [fees, setFees] = useState<FeeMetrics[]>([]);
@@ -27,11 +30,10 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [client, setClient] = useState<DynamicBondingCurveClient | null>(null);
   const [toasts, setToasts] = useState<Array<{id: number, message: string, type: 'success' | 'error'}>>([]);
-
-  // Use the wallet adapter hooks
+  
   const wallet = useWallet();
   const { connection } = useConnection();
-
+  
   const showToast = useCallback((message: string, type: 'success' | 'error') => {
     const id = Date.now();
     setToasts(prev => [...prev, { id, message, type }]);
@@ -39,6 +41,20 @@ export default function Home() {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 5000);
   }, []);
+  
+  // Calculate total partner fees in USD
+  const calculatePartnerFeesUSD = (fee: FeeMetrics): number => {
+    const totalPartnerFeeLamports = 
+      fee.partnerBaseFee.toNumber() + fee.partnerQuoteFee.toNumber();
+    const totalPartnerFeeSOL = totalPartnerFeeLamports / LAMPORTS_PER_SOL;
+    return totalPartnerFeeSOL * SOL_PRICE_USD;
+  };
+  
+  // Check if fees are above $1 threshold
+  const canClaimFees = (fee: FeeMetrics): boolean => {
+    const feesInUSD = calculatePartnerFeesUSD(fee);
+    return feesInUSD >= MIN_CLAIM_USD;
+  };
 
   useEffect(() => {
     async function fetchFees() {
@@ -67,16 +83,18 @@ export default function Home() {
             setClient(clientInstance);
             console.log(`Successfully fetched ${poolFees.length} pool fees from ${endpoint}`);
             
-            let sum = 0;
-            console.log(
-              "Partner Quote Fees:",
-              poolFees.map((fee) => {
-                const feeInSol = fee.partnerQuoteFee.toNumber() / LAMPORTS_PER_SOL;
-                sum += feeInSol;
-                return feeInSol;
-              })
-            );
-            console.log("Total Partner Quote Fees (SOL):", sum);
+            // Log fees per pool
+            poolFees.forEach((fee, index) => {
+              const partnerFeeSOL = (fee.partnerBaseFee.toNumber() + fee.partnerQuoteFee.toNumber()) / LAMPORTS_PER_SOL;
+              const partnerFeeUSD = partnerFeeSOL * SOL_PRICE_USD;
+              console.log(`Pool ${index + 1} (${fee.poolAddress.toString().slice(0, 8)}...):`, {
+                partnerBaseFee: fee.partnerBaseFee.toNumber() / LAMPORTS_PER_SOL,
+                partnerQuoteFee: fee.partnerQuoteFee.toNumber() / LAMPORTS_PER_SOL,
+                totalPartnerFeeSOL: partnerFeeSOL,
+                totalPartnerFeeUSD: partnerFeeUSD,
+                canClaim: partnerFeeUSD >= MIN_CLAIM_USD
+              });
+            });
             
             return;
           } catch (endpointError) {
@@ -108,14 +126,24 @@ export default function Home() {
     
     fetchFees();
   }, []);
-
+  
   const claimFeesForPool = useCallback(
     async (fee: FeeMetrics) => {
       if (!client || !wallet.publicKey || !wallet.signTransaction) {
         showToast("Please connect your wallet first", "error");
         return false;
       }
-
+      
+      // Check if fees are above $1 threshold
+      if (!canClaimFees(fee)) {
+        const feesInUSD = calculatePartnerFeesUSD(fee);
+        showToast(
+          `Cannot claim fees below $${MIN_CLAIM_USD}. Current fees: $${feesInUSD.toFixed(2)}`,
+          "error"
+        );
+        return false;
+      }
+      
       try {
         setClaimingPool(fee.poolAddress.toString());
         
@@ -150,23 +178,21 @@ export default function Home() {
     },
     [client, wallet, connection, showToast]
   );
-
+  
   const claimFeesAllPools = useCallback(async () => {
     if (!client || !wallet.publicKey) {
       showToast("Please connect your wallet first", "error");
       return;
     }
-
+    
     setClaimingAll(true);
     let successCount = 0;
     let failCount = 0;
-
+    let skippedCount = 0;
+    
     for (const fee of fees) {
-      const hasClaimableFees =
-        fee.partnerBaseFee.toNumber() > 0 ||
-        fee.partnerQuoteFee.toNumber() > 0;
-
-      if (hasClaimableFees) {
+      // Only claim if fees are above $1 threshold
+      if (canClaimFees(fee)) {
         const success = await claimFeesForPool(fee);
         if (success) {
           successCount++;
@@ -174,20 +200,23 @@ export default function Home() {
           failCount++;
         }
         await new Promise(resolve => setTimeout(resolve, 1000));
+      } else {
+        skippedCount++;
+        console.log(`Skipped pool ${fee.poolAddress.toString().slice(0, 8)}... - fees below $${MIN_CLAIM_USD}`);
       }
     }
-
+    
     setClaimingAll(false);
     showToast(
-      `Batch claim complete: ${successCount} successful, ${failCount} failed`,
+      `Batch claim complete: ${successCount} successful, ${failCount} failed, ${skippedCount} skipped (below $${MIN_CLAIM_USD})`,
       successCount > 0 ? "success" : "error"
     );
   }, [fees, client, wallet, claimFeesForPool, showToast]);
-
+  
   const formatLamports = (lamports: BN) => {
     return (lamports.toNumber() / LAMPORTS_PER_SOL).toFixed(9);
   };
-
+  
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-6">
       {/* Toast Notifications */}
@@ -205,7 +234,7 @@ export default function Home() {
           </div>
         ))}
       </div>
-
+      
       <div className="max-w-6xl mx-auto">
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
@@ -223,7 +252,7 @@ export default function Home() {
             </button>
           </div>
         </div>
-
+        
         {/* Wallet Status Indicator */}
         {wallet.connected && wallet.publicKey && (
           <div className="mb-4 p-3 bg-green-100 dark:bg-green-900 rounded-lg">
@@ -265,10 +294,9 @@ export default function Home() {
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             {fees.map((fee) => {
               const isClaimingThis = claimingPool === fee.poolAddress.toString();
-              const hasClaimableFees =
-                fee.partnerBaseFee.toNumber() > 0 ||
-                fee.partnerQuoteFee.toNumber() > 0;
-
+              const hasClaimableFees = canClaimFees(fee);
+              const feesInUSD = calculatePartnerFeesUSD(fee);
+              
               return (
                 <div
                   key={fee.poolAddress.toString()}
@@ -278,13 +306,18 @@ export default function Home() {
                     <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
                       Pool Address
                     </h3>
-                    {wallet.connected && hasClaimableFees && (
+                    {wallet.connected && (
                       <button
                         onClick={() => claimFeesForPool(fee)}
-                        disabled={isClaimingThis || claimingAll}
-                        className="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={isClaimingThis || claimingAll || !hasClaimableFees}
+                        className={`px-3 py-1 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                          hasClaimableFees 
+                            ? 'bg-green-600 hover:bg-green-700' 
+                            : 'bg-gray-400'
+                        }`}
+                        title={!hasClaimableFees ? `Fees below $${MIN_CLAIM_USD} threshold` : ''}
                       >
-                        {isClaimingThis ? "Claiming..." : "Claim"}
+                        {isClaimingThis ? "Claiming..." : hasClaimableFees ? "Claim" : "< $1"}
                       </button>
                     )}
                   </div>
@@ -292,6 +325,27 @@ export default function Home() {
                   <p className="text-sm text-gray-600 dark:text-gray-300 font-mono break-all mb-4">
                     {fee.poolAddress.toString()}
                   </p>
+                  
+                  {/* Display total fees in USD */}
+                  <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900 rounded-lg">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-semibold text-blue-800 dark:text-blue-200">
+                        Total Partner Fees:
+                      </span>
+                      <span className={`text-sm font-bold ${
+                        hasClaimableFees 
+                          ? 'text-green-600 dark:text-green-400' 
+                          : 'text-red-600 dark:text-red-400'
+                      }`}>
+                        ${feesInUSD.toFixed(2)} USD
+                      </span>
+                    </div>
+                    {!hasClaimableFees && (
+                      <p className="text-xs text-red-600 dark:text-red-400 mt-1">
+                        Below ${MIN_CLAIM_USD} minimum
+                      </p>
+                    )}
+                  </div>
                   
                   <div className="space-y-3">
                     <div className="border-b border-gray-200 dark:border-gray-600 pb-3 mb-3">
@@ -325,7 +379,7 @@ export default function Home() {
                         </div>
                       </div>
                     </div>
-
+                    
                     <div>
                       <h4 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-2">Quote Fees</h4>
                       <div className="space-y-2">
@@ -366,4 +420,5 @@ export default function Home() {
       </div>
     </div>
   );
-}
+                    }
+
