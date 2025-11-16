@@ -213,6 +213,7 @@ export default function Home() {
     },
     [client, wallet, connection, showToast]
   );  
+
   const claimFeesAllPools = useCallback(async () => {
     if (!client || !wallet.publicKey) {
       showToast("Please connect your wallet first", "error");
