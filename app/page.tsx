@@ -133,7 +133,7 @@ export default function Home() {
         showToast("Please connect your wallet first", "error");
         return false;
       }
-      
+
       // Check if fees are above $1 threshold
       if (!canClaimFees(fee)) {
         const feesInUSD = calculatePartnerFeesUSD(fee);
@@ -143,10 +143,10 @@ export default function Home() {
         );
         return false;
       }
-      
+
       try {
         setClaimingPool(fee.poolAddress.toString());
-        
+
         const tx = await client.partner.claimPartnerTradingFee2({
           pool: fee.poolAddress,
           feeClaimer: wallet.publicKey,
@@ -155,10 +155,36 @@ export default function Home() {
           maxQuoteAmount: new BN(1_000_000_000_000),
           receiver: wallet.publicKey,
         });
+
+        // Get latest blockhash for better transaction handling
+        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
         
-        const txSig = await wallet.sendTransaction(tx, connection);
-        await connection.confirmTransaction(txSig, "confirmed");
-        
+        const txSig = await wallet.sendTransaction(tx, connection, {
+          skipPreflight: false,
+          preflightCommitment: 'confirmed',
+          maxRetries: 3,
+        });
+
+        console.log(`Transaction sent: ${txSig}`);
+
+        // Wait for confirmation with timeout handling
+        const confirmation = await Promise.race([
+          connection.confirmTransaction({
+            signature: txSig,
+            blockhash,
+            lastValidBlockHeight,
+          }, 'confirmed'),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Confirmation timeout')), 60000)
+          )
+        ]);
+
+        // Verify transaction actually succeeded
+        const status = await connection.getSignatureStatus(txSig);
+        if (status?.value?.err) {
+          throw new Error(`Transaction failed: ${JSON.stringify(status.value.err)}`);
+        }
+
         showToast(
           `Fees claimed for pool ${fee.poolAddress.toString().slice(0, 8)}...! Tx: ${txSig.slice(0, 8)}...`,
           "success"
@@ -167,18 +193,26 @@ export default function Home() {
       } catch (err) {
         console.error("Claim fees error:", err);
         const errorMsg = err instanceof Error ? err.message : "Unknown error";
-        showToast(
-          `Failed to claim fees for pool ${fee.poolAddress.toString().slice(0, 8)}...: ${errorMsg}`,
-          "error"
-        );
+        
+        // If it's a timeout, provide a more helpful message
+        if (errorMsg.includes('timeout') || errorMsg.includes('30.00 seconds')) {
+          showToast(
+            `Transaction may still be processing. Check explorer: ${fee.poolAddress.toString().slice(0, 8)}...`,
+            "error"
+          );
+        } else {
+          showToast(
+            `Failed to claim fees for pool ${fee.poolAddress.toString().slice(0, 8)}...: ${errorMsg}`,
+            "error"
+          );
+        }
         return false;
       } finally {
         setClaimingPool(null);
       }
     },
     [client, wallet, connection, showToast]
-  );
-  
+  );  
   const claimFeesAllPools = useCallback(async () => {
     if (!client || !wallet.publicKey) {
       showToast("Please connect your wallet first", "error");
