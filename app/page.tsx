@@ -23,13 +23,20 @@ export default function Home() {
   const [fees, setFees] = useState<FeeMetrics[]>([]);
   const [loading, setLoading] = useState(true);
   const [claimingPool, setClaimingPool] = useState<string | null>(null);
-  const [claimingAll, setClaimingAll] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [client, setClient] = useState<DynamicBondingCurveClient | null>(null);
   const [toasts, setToasts] = useState<Array<{id: number, message: string, type: 'success' | 'error'}>>([]);
   
   const wallet = useWallet();
   const { connection } = useConnection();
+
+   const endpoint = "https://mainnet.helius-rpc.com/?api-key=a9af5820-b142-4aaa-9296-ba25637a13f0"
+  const conn = new Connection(endpoint, {
+  commitment: "confirmed",
+  confirmTransactionInitialTimeout: 60000,
+});
+  const clientInstance = new DynamicBondingCurveClient(conn, "confirmed");
+
   
   const showToast = useCallback((message: string, type: 'success' | 'error') => {
     const id = Date.now();
@@ -52,18 +59,21 @@ export default function Home() {
         setLoading(true);
         setError(null);
         
-        const rpcEndpoints = [
-          "https://mainnet.helius-rpc.com/?api-key=a9af5820-b142-4aaa-9296-ba25637a13f0"
-        ];
-        
+       const rpcEndpoints = [
+  "https://api.mainnet-beta.solana.com",
+  "https://solana-api.projectserum.com",
+];        
         let lastError: Error | null = null;
         
         for (const endpoint of rpcEndpoints) {
           try {
             console.log(`Trying RPC endpoint: ${endpoint}`);
-            const conn = new Connection(endpoint);
-            const clientInstance = new DynamicBondingCurveClient(conn, "confirmed");
-            const configAddress = new PublicKey("28eYKBRnoVjVCHaJUeLKYzZyBJR3c5TG1UMGQccpSZgE");
+            const conn = new Connection(endpoint, {
+              commitment: "confirmed",
+              confirmTransactionInitialTimeout: 60000,
+            });
+            
+               const configAddress = new PublicKey("28eYKBRnoVjVCHaJUeLKYzZyBJR3c5TG1UMGQccpSZgE");
             
             const poolFees = await clientInstance.state.getPoolsFeesByConfig(configAddress);
             setFees(poolFees);
@@ -111,88 +121,104 @@ export default function Home() {
     fetchFees();
   }, []);
   
+  // Helper function to retry with exponential backoff
+  const retryWithBackoff = async <T,>(
+    fn: () => Promise<T>,
+    maxRetries = 3,
+    baseDelay = 2000
+  ): Promise<T> => {
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        const is403 = err?.message?.includes('403') || err?.message?.includes('forbidden');
+        const isRateLimit = err?.message?.includes('429') || err?.message?.includes('rate');
+        
+        if ((is403 || isRateLimit) && i < maxRetries - 1) {
+          const delay = baseDelay * Math.pow(2, i);
+          console.log(`Retry ${i + 1}/${maxRetries} after ${delay}ms`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error('Max retries exceeded');
+  };
 
- const claimFeesForPool = useCallback(
+  const claimFeesForPool = useCallback(
     async (fee: FeeMetrics) => {
       if (!client || !wallet.publicKey || !wallet.signTransaction) {
         showToast("Please connect your wallet first", "error");
         return false;
       }
 
+      setClaimingPool(fee.poolAddress.toString());
+
       try {
-        setClaimingPool(fee.poolAddress.toString());
+        // Use retry logic for the claim operation
+        await retryWithBackoff(async () => {
+          const tx = await client.partner.claimPartnerTradingFee2({
+            pool: fee.poolAddress,
+            feeClaimer: wallet.publicKey!,
+            payer: wallet.publicKey!,
+            maxBaseAmount: new BN(1_000_000_000_000),
+            maxQuoteAmount: new BN(1_000_000_000_000),
+            receiver: wallet.publicKey!,
+          });
 
-        const tx = await client.partner.claimPartnerTradingFee2({
-          pool: fee.poolAddress,
-          feeClaimer: wallet.publicKey,
-          payer: wallet.publicKey,
-          maxBaseAmount: new BN(1_000_000_000_000),
-          maxQuoteAmount: new BN(1_000_000_000_000),
-          receiver: wallet.publicKey,
-        });
+          // Get latest blockhash for better transaction handling
+          const { blockhash } = await connection.getLatestBlockhash('finalized');
+          tx.recentBlockhash = blockhash;
+          tx.feePayer = wallet.publicKey!;
+          
+          const txSig = await wallet.sendTransaction(tx, connection);
+          await connection.confirmTransaction(txSig, "confirmed");
 
-        // Get latest blockhash for better transaction handling
-        const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
+          console.log(`Transaction sent: ${txSig}`);
+        }, 3, 2000);
         
-        const txSig = await wallet.sendTransaction(tx, connection);
-        await connection.confirmTransaction(txSig, "confirmed");
-
-        console.log(`Transaction sent: ${txSig}`);
-        showToast(`Successfully claimed fees for pool ${fee.poolAddress.toString().slice(0, 8)}...`, "success");
+        showToast(
+          `Successfully claimed fees for pool ${fee.poolAddress.toString().slice(0, 8)}...`,
+          "success"
+        );
         
         return true;
-      } catch (err) {
+      } catch (err: any) {
         console.error("Claim fees error:", err);
+        
         const errorMsg = err instanceof Error ? err.message : "Unknown error";
         
-        // If it's a timeout, provide a more helpful message
-        if (errorMsg.includes('timeout') || errorMsg.includes('30.00 seconds')) {
+        // Better error messages
+        if (errorMsg.includes('403') || errorMsg.includes('forbidden')) {
           showToast(
-            `Transaction may still be processing. Check explorer: ${fee.poolAddress.toString().slice(0, 8)}...`,
+            `RPC access denied. Please check your RPC endpoint or try again later.`,
+            "error"
+          );
+        } else if (errorMsg.includes('timeout') || errorMsg.includes('30.00 seconds')) {
+          showToast(
+            `Transaction timeout. Check explorer: ${fee.poolAddress.toString().slice(0, 8)}...`,
+            "error"
+          );
+        } else if (errorMsg.includes('User rejected')) {
+          showToast(
+            `Transaction cancelled by user`,
             "error"
           );
         } else {
           showToast(
-            `Failed to claim fees for pool ${fee.poolAddress.toString().slice(0, 8)}...: ${errorMsg}`,
+            `Failed to claim fees: ${errorMsg}`,
             "error"
           );
         }
+        
         return false;
       } finally {
         setClaimingPool(null);
       }
     },
     [client, wallet, connection, showToast]
-  );    
-
-
-
-  const claimFeesAllPools = useCallback(async () => {
-    if (!client || !wallet.publicKey) {
-      showToast("Please connect your wallet first", "error");
-      return;
-    }
-    
-    setClaimingAll(true);
-    let successCount = 0;
-    let failCount = 0;
-    
-    for (const fee of fees) {
-      const success = await claimFeesForPool(fee);
-      if (success) {
-        successCount++;
-      } else {
-        failCount++;
-      }
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    
-    setClaimingAll(false);
-    showToast(
-      `Batch claim complete: ${successCount} successful, ${failCount} failed`,
-      successCount > 0 ? "success" : "error"
-    );
-  }, [fees, client, wallet, claimFeesForPool, showToast]);
+  );
   
   const formatUSDC = (amount: BN) => {
     return (amount.toNumber() / USDC_DECIMALS).toFixed(6);
@@ -222,16 +248,7 @@ export default function Home() {
             Partner Pool Fees Dashboard
           </h1>
           
-          <div className="flex gap-3">
-            <ConnectWalletButton />
-            <button
-              onClick={claimFeesAllPools}
-              disabled={claimingAll || fees.length === 0 || !wallet.connected}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {claimingAll ? "Claiming All..." : "Claim All Fees"}
-            </button>
-          </div>
+          <ConnectWalletButton />
         </div>
         
         {/* Wallet Status Indicator */}
@@ -289,7 +306,7 @@ export default function Home() {
                     {wallet.connected && (
                       <button
                         onClick={() => claimFeesForPool(fee)}
-                        disabled={isClaimingThis || claimingAll}
+                        disabled={isClaimingThis}
                         className="px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {isClaimingThis ? "Claiming..." : "Claim"}
