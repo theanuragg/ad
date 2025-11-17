@@ -1,4 +1,3 @@
-
 'use client'
 
 import { useEffect, useState, useCallback } from "react";
@@ -18,9 +17,7 @@ type FeeMetrics = {
   totalTradingQuoteFee: BN;
 };
 
-const LAMPORTS_PER_SOL = 1_000_000_000;
-const MIN_CLAIM_USD = 1; // Minimum $1 to claim
-const SOL_PRICE_USD = 150; // Update with real-time price or fetch from an API
+const USDC_DECIMALS = 1_000_000; // USDC has 6 decimals
 
 export default function Home() {
   const [fees, setFees] = useState<FeeMetrics[]>([]);
@@ -42,18 +39,11 @@ export default function Home() {
     }, 5000);
   }, []);
   
-  // Calculate total partner fees in USD
-  const calculatePartnerFeesUSD = (fee: FeeMetrics): number => {
-    const totalPartnerFeeLamports = 
+  // Calculate total partner fees in USDC
+  const calculatePartnerFeesUSDC = (fee: FeeMetrics): number => {
+    const totalPartnerFee = 
       fee.partnerBaseFee.toNumber() + fee.partnerQuoteFee.toNumber();
-    const totalPartnerFeeSOL = totalPartnerFeeLamports / LAMPORTS_PER_SOL;
-    return totalPartnerFeeSOL * SOL_PRICE_USD;
-  };
-  
-  // Check if fees are above $1 threshold
-  const canClaimFees = (fee: FeeMetrics): boolean => {
-    const feesInUSD = calculatePartnerFeesUSD(fee);
-    return feesInUSD >= MIN_CLAIM_USD;
+    return totalPartnerFee / USDC_DECIMALS;
   };
 
   useEffect(() => {
@@ -63,10 +53,7 @@ export default function Home() {
         setError(null);
         
         const rpcEndpoints = [
-          "https://solana-mainnet.g.alchemy.com/v2/demo",
-          "https://api.mainnet-beta.solana.com",
-          "https://rpc.ankr.com/solana",
-          "https://solana-api.projectserum.com"
+          "https://mainnet.helius-rpc.com/?api-key=a9af5820-b142-4aaa-9296-ba25637a13f0"
         ];
         
         let lastError: Error | null = null;
@@ -85,14 +72,11 @@ export default function Home() {
             
             // Log fees per pool
             poolFees.forEach((fee, index) => {
-              const partnerFeeSOL = (fee.partnerBaseFee.toNumber() + fee.partnerQuoteFee.toNumber()) / LAMPORTS_PER_SOL;
-              const partnerFeeUSD = partnerFeeSOL * SOL_PRICE_USD;
+              const partnerFeeUSDC = calculatePartnerFeesUSDC(fee);
               console.log(`Pool ${index + 1} (${fee.poolAddress.toString().slice(0, 8)}...):`, {
-                partnerBaseFee: fee.partnerBaseFee.toNumber() / LAMPORTS_PER_SOL,
-                partnerQuoteFee: fee.partnerQuoteFee.toNumber() / LAMPORTS_PER_SOL,
-                totalPartnerFeeSOL: partnerFeeSOL,
-                totalPartnerFeeUSD: partnerFeeUSD,
-                canClaim: partnerFeeUSD >= MIN_CLAIM_USD
+                partnerBaseFee: fee.partnerBaseFee.toNumber() / USDC_DECIMALS,
+                partnerQuoteFee: fee.partnerQuoteFee.toNumber() / USDC_DECIMALS,
+                totalPartnerFeeUSDC: partnerFeeUSDC
               });
             });
             
@@ -134,16 +118,6 @@ export default function Home() {
         return false;
       }
 
-      // Check if fees are above $1 threshold
-      if (!canClaimFees(fee)) {
-        const feesInUSD = calculatePartnerFeesUSD(fee);
-        showToast(
-          `Cannot claim fees below $${MIN_CLAIM_USD}. Current fees: $${feesInUSD.toFixed(2)}`,
-          "error"
-        );
-        return false;
-      }
-
       try {
         setClaimingPool(fee.poolAddress.toString());
 
@@ -159,36 +133,12 @@ export default function Home() {
         // Get latest blockhash for better transaction handling
         const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
         
-        const txSig = await wallet.sendTransaction(tx, connection, {
-          skipPreflight: false,
-          preflightCommitment: 'confirmed',
-          maxRetries: 3,
-        });
+        const txSig = await wallet.sendTransaction(tx, connection);
+        await connection.confirmTransaction(txSig, "confirmed");
 
         console.log(`Transaction sent: ${txSig}`);
-
-        // Wait for confirmation with timeout handling
-        const confirmation = await Promise.race([
-          connection.confirmTransaction({
-            signature: txSig,
-            blockhash,
-            lastValidBlockHeight,
-          }, 'confirmed'),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Confirmation timeout')), 60000)
-          )
-        ]);
-
-        // Verify transaction actually succeeded
-        const status = await connection.getSignatureStatus(txSig);
-        if (status?.value?.err) {
-          throw new Error(`Transaction failed: ${JSON.stringify(status.value.err)}`);
-        }
-
-        showToast(
-          `Fees claimed for pool ${fee.poolAddress.toString().slice(0, 8)}...! Tx: ${txSig.slice(0, 8)}...`,
-          "success"
-        );
+        showToast(`Successfully claimed fees for pool ${fee.poolAddress.toString().slice(0, 8)}...`, "success");
+        
         return true;
       } catch (err) {
         console.error("Claim fees error:", err);
@@ -223,33 +173,26 @@ export default function Home() {
     setClaimingAll(true);
     let successCount = 0;
     let failCount = 0;
-    let skippedCount = 0;
     
     for (const fee of fees) {
-      // Only claim if fees are above $1 threshold
-      if (canClaimFees(fee)) {
-        const success = await claimFeesForPool(fee);
-        if (success) {
-          successCount++;
-        } else {
-          failCount++;
-        }
-        await new Promise(resolve => setTimeout(resolve, 1000));
+      const success = await claimFeesForPool(fee);
+      if (success) {
+        successCount++;
       } else {
-        skippedCount++;
-        console.log(`Skipped pool ${fee.poolAddress.toString().slice(0, 8)}... - fees below $${MIN_CLAIM_USD}`);
+        failCount++;
       }
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
     
     setClaimingAll(false);
     showToast(
-      `Batch claim complete: ${successCount} successful, ${failCount} failed, ${skippedCount} skipped (below $${MIN_CLAIM_USD})`,
+      `Batch claim complete: ${successCount} successful, ${failCount} failed`,
       successCount > 0 ? "success" : "error"
     );
   }, [fees, client, wallet, claimFeesForPool, showToast]);
   
-  const formatLamports = (lamports: BN) => {
-    return (lamports.toNumber() / LAMPORTS_PER_SOL).toFixed(9);
+  const formatUSDC = (amount: BN) => {
+    return (amount.toNumber() / USDC_DECIMALS).toFixed(6);
   };
   
   return (
@@ -329,8 +272,7 @@ export default function Home() {
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             {fees.map((fee) => {
               const isClaimingThis = claimingPool === fee.poolAddress.toString();
-              const hasClaimableFees = canClaimFees(fee);
-              const feesInUSD = calculatePartnerFeesUSD(fee);
+              const feesInUSDC = calculatePartnerFeesUSDC(fee);
               
               return (
                 <div
@@ -344,15 +286,10 @@ export default function Home() {
                     {wallet.connected && (
                       <button
                         onClick={() => claimFeesForPool(fee)}
-                        disabled={isClaimingThis || claimingAll || !hasClaimableFees}
-                        className={`px-3 py-1 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                          hasClaimableFees 
-                            ? 'bg-green-600 hover:bg-green-700' 
-                            : 'bg-gray-400'
-                        }`}
-                        title={!hasClaimableFees ? `Fees below $${MIN_CLAIM_USD} threshold` : ''}
+                        disabled={isClaimingThis || claimingAll}
+                        className="px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        {isClaimingThis ? "Claiming..." : hasClaimableFees ? "Claim" : "< $1"}
+                        {isClaimingThis ? "Claiming..." : "Claim"}
                       </button>
                     )}
                   </div>
@@ -361,25 +298,16 @@ export default function Home() {
                     {fee.poolAddress.toString()}
                   </p>
                   
-                  {/* Display total fees in USD */}
+                  {/* Display total fees in USDC */}
                   <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900 rounded-lg">
                     <div className="flex justify-between items-center">
                       <span className="text-sm font-semibold text-blue-800 dark:text-blue-200">
                         Total Partner Fees:
                       </span>
-                      <span className={`text-sm font-bold ${
-                        hasClaimableFees 
-                          ? 'text-green-600 dark:text-green-400' 
-                          : 'text-red-600 dark:text-red-400'
-                      }`}>
-                        ${feesInUSD.toFixed(2)} USD
+                      <span className="text-sm font-bold text-green-600 dark:text-green-400">
+                        ${feesInUSDC.toFixed(2)} USDC
                       </span>
                     </div>
-                    {!hasClaimableFees && (
-                      <p className="text-xs text-red-600 dark:text-red-400 mt-1">
-                        Below ${MIN_CLAIM_USD} minimum
-                      </p>
-                    )}
                   </div>
                   
                   <div className="space-y-3">
@@ -391,7 +319,7 @@ export default function Home() {
                             Partner:
                           </span>
                           <span className="text-sm font-mono text-gray-900 dark:text-white">
-                            {formatLamports(fee.partnerBaseFee)} SOL
+                            {formatUSDC(fee.partnerBaseFee)} USDC
                           </span>
                         </div>
                         
@@ -400,7 +328,7 @@ export default function Home() {
                             Creator:
                           </span>
                           <span className="text-sm font-mono text-gray-900 dark:text-white">
-                            {formatLamports(fee.creatorBaseFee)} SOL
+                            {formatUSDC(fee.creatorBaseFee)} USDC
                           </span>
                         </div>
                         
@@ -409,7 +337,7 @@ export default function Home() {
                             Total Trading:
                           </span>
                           <span className="text-sm font-mono font-semibold text-green-600 dark:text-green-400">
-                            {formatLamports(fee.totalTradingBaseFee)} SOL
+                            {formatUSDC(fee.totalTradingBaseFee)} USDC
                           </span>
                         </div>
                       </div>
@@ -423,7 +351,7 @@ export default function Home() {
                             Partner:
                           </span>
                           <span className="text-sm font-mono text-gray-900 dark:text-white">
-                            {formatLamports(fee.partnerQuoteFee)} SOL
+                            {formatUSDC(fee.partnerQuoteFee)} USDC
                           </span>
                         </div>
                         
@@ -432,7 +360,7 @@ export default function Home() {
                             Creator:
                           </span>
                           <span className="text-sm font-mono text-gray-900 dark:text-white">
-                            {formatLamports(fee.creatorQuoteFee)} SOL
+                            {formatUSDC(fee.creatorQuoteFee)} USDC
                           </span>
                         </div>
                         
@@ -441,7 +369,7 @@ export default function Home() {
                             Total Trading:
                           </span>
                           <span className="text-sm font-mono font-semibold text-blue-600 dark:text-blue-400">
-                            {formatLamports(fee.totalTradingQuoteFee)} SOL
+                            {formatUSDC(fee.totalTradingQuoteFee)} USDC
                           </span>
                         </div>
                       </div>
@@ -455,5 +383,4 @@ export default function Home() {
       </div>
     </div>
   );
-                    }
-
+}
