@@ -111,7 +111,7 @@ export default function Home() {
     fetchFees();
   }, []);
   
-  const claimFeesForPool = useCallback(
+ const claimFeesForPool = useCallback(
     async (fee: FeeMetrics) => {
       if (!client || !wallet.publicKey || !wallet.signTransaction) {
         showToast("Please connect your wallet first", "error");
@@ -162,7 +162,7 @@ export default function Home() {
       }
     },
     [client, wallet, connection, showToast]
-  );  
+  );   
 
   const claimFeesAllPools = useCallback(async () => {
     if (!client || !wallet.publicKey) {
