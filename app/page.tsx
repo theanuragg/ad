@@ -28,15 +28,14 @@ export default function Home() {
   const [toasts, setToasts] = useState<Array<{id: number, message: string, type: 'success' | 'error'}>>([]);
   
   const wallet = useWallet();
-  const { connection } = useConnection();
+  
 
-   const endpoint = "https://mainnet.helius-rpc.com/?api-key=a9af5820-b142-4aaa-9296-ba25637a13f0"
-  const conn = new Connection(endpoint, {
-  commitment: "confirmed",
-  confirmTransactionInitialTimeout: 60000,
-});
-  const clientInstance = new DynamicBondingCurveClient(conn, "confirmed");
+  const connection = new Connection(
+    "https://mainnet.helius-rpc.com/?api-key=a9af5820-b142-4aaa-9296-ba25637a13f0",
+    "confirmed"
+  );
 
+  const clientInstance = new DynamicBondingCurveClient(connection, "confirmed");
   
   const showToast = useCallback((message: string, type: 'success' | 'error') => {
     const id = Date.now();
@@ -61,7 +60,6 @@ export default function Home() {
         
        const rpcEndpoints = [
   "https://api.mainnet-beta.solana.com",
-  "https://solana-api.projectserum.com",
 ];        
         let lastError: Error | null = null;
         
