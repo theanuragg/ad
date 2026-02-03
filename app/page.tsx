@@ -17,7 +17,7 @@ type FeeMetrics = {
   totalTradingQuoteFee: BN;
 };
 
-const USDC_DECIMALS = 1_000_000_000; // USDC has 6 decimals
+const SOL_DECIMALS = 1_000_000_000; // SOL has 9 decimals (1 SOL = 1,000,000,000 lamports)
 
 export default function Home() {
   const [fees, setFees] = useState<FeeMetrics[]>([]);
@@ -45,11 +45,11 @@ export default function Home() {
     }, 5000);
   }, []);
   
-  // Calculate total partner fees in USDC
-  const calculatePartnerFeesUSDC = (fee: FeeMetrics): number => {
+  // Calculate total partner fees in SOL
+  const calculatePartnerFeesSOL = (fee: FeeMetrics): number => {
     const totalPartnerFee = 
       fee.partnerBaseFee.toNumber() + fee.partnerQuoteFee.toNumber();
-    return totalPartnerFee / USDC_DECIMALS;
+    return totalPartnerFee / SOL_DECIMALS;
   };
 
   useEffect(() => {
@@ -80,11 +80,11 @@ export default function Home() {
             
             // Log fees per pool
             poolFees.forEach((fee, index) => {
-              const partnerFeeUSDC = calculatePartnerFeesUSDC(fee);
+              const partnerFeeSOL = calculatePartnerFeesSOL(fee);
               console.log(`Pool ${index + 1} (${fee.poolAddress.toString().slice(0, 8)}...):`, {
-                partnerBaseFee: fee.partnerBaseFee.toNumber() / USDC_DECIMALS,
-                partnerQuoteFee: fee.partnerQuoteFee.toNumber() / USDC_DECIMALS,
-                totalPartnerFeeUSDC: partnerFeeUSDC
+                partnerBaseFee: fee.partnerBaseFee.toNumber() / SOL_DECIMALS,
+                partnerQuoteFee: fee.partnerQuoteFee.toNumber() / SOL_DECIMALS,
+                totalPartnerFeeSOL: partnerFeeSOL
               });
             });
             
@@ -218,8 +218,8 @@ export default function Home() {
     [client, wallet, connection, showToast]
   );
   
-  const formatUSDC = (amount: BN) => {
-    return (amount.toNumber() / USDC_DECIMALS).toFixed(6);
+  const formatSOL = (amount: BN) => {
+    return (amount.toNumber() / SOL_DECIMALS).toFixed(6);
   };
   
   return (
@@ -290,7 +290,7 @@ export default function Home() {
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             {fees.map((fee) => {
               const isClaimingThis = claimingPool === fee.poolAddress.toString();
-              const feesInUSDC = calculatePartnerFeesUSDC(fee);
+              const feesInSOL = calculatePartnerFeesSOL(fee);
               
               return (
                 <div
@@ -316,14 +316,14 @@ export default function Home() {
                     {fee.poolAddress.toString()}
                   </p>
                   
-                  {/* Display total fees in USDC */}
+                  {/* Display total fees in SOL */}
                   <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900 rounded-lg">
                     <div className="flex justify-between items-center">
                       <span className="text-sm font-semibold text-blue-800 dark:text-blue-200">
                         Total Partner Fees:
                       </span>
                       <span className="text-sm font-bold text-green-600 dark:text-green-400">
-                        ${feesInUSDC.toFixed(2)} USDC
+                        {feesInSOL.toFixed(6)} SOL
                       </span>
                     </div>
                   </div>
@@ -337,7 +337,7 @@ export default function Home() {
                             Partner:
                           </span>
                           <span className="text-sm font-mono text-gray-900 dark:text-white">
-                            {formatUSDC(fee.partnerBaseFee)} USDC
+                            {formatSOL(fee.partnerBaseFee)} SOL
                           </span>
                         </div>
                         
@@ -346,7 +346,7 @@ export default function Home() {
                             Creator:
                           </span>
                           <span className="text-sm font-mono text-gray-900 dark:text-white">
-                            {formatUSDC(fee.creatorBaseFee)} USDC
+                            {formatSOL(fee.creatorBaseFee)} SOL
                           </span>
                         </div>
                         
@@ -355,7 +355,7 @@ export default function Home() {
                             Total Trading:
                           </span>
                           <span className="text-sm font-mono font-semibold text-green-600 dark:text-green-400">
-                            {formatUSDC(fee.totalTradingBaseFee)} USDC
+                            {formatSOL(fee.totalTradingBaseFee)} SOL
                           </span>
                         </div>
                       </div>
@@ -369,7 +369,7 @@ export default function Home() {
                             Partner:
                           </span>
                           <span className="text-sm font-mono text-gray-900 dark:text-white">
-                            {formatUSDC(fee.partnerQuoteFee)} USDC
+                            {formatSOL(fee.partnerQuoteFee)} SOL
                           </span>
                         </div>
                         
@@ -378,7 +378,7 @@ export default function Home() {
                             Creator:
                           </span>
                           <span className="text-sm font-mono text-gray-900 dark:text-white">
-                            {formatUSDC(fee.creatorQuoteFee)} USDC
+                            {formatSOL(fee.creatorQuoteFee)} SOL
                           </span>
                         </div>
                         
@@ -387,7 +387,7 @@ export default function Home() {
                             Total Trading:
                           </span>
                           <span className="text-sm font-mono font-semibold text-blue-600 dark:text-blue-400">
-                            {formatUSDC(fee.totalTradingQuoteFee)} USDC
+                            {formatSOL(fee.totalTradingQuoteFee)} SOL
                           </span>
                         </div>
                       </div>
