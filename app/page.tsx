@@ -17,7 +17,7 @@ type FeeMetrics = {
   totalTradingQuoteFee: BN;
 };
 
-const USDC_DECIMALS = 1_000_000; // USDC has 6 decimals
+const USDC_DECIMALS = 1_000_000_000; // USDC has 6 decimals
 
 export default function Home() {
   const [fees, setFees] = useState<FeeMetrics[]>([]);
@@ -71,7 +71,7 @@ export default function Home() {
               confirmTransactionInitialTimeout: 60000,
             });
             
-               const configAddress = new PublicKey("ErWtZUSLkr9RPKrhVGY59mD8S682a6xh6atfFrg25bXB");
+               const configAddress = new PublicKey("EDbZNc21p9d9UqjuuCLVhXizqn5B4b7rJEcer4rWMs6H");
             
             const poolFees = await clientInstance.state.getPoolsFeesByConfig(configAddress);
             setFees(poolFees);
