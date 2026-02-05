@@ -71,7 +71,7 @@ export default function Home() {
               confirmTransactionInitialTimeout: 60000,
             });
             
-               const configAddress = new PublicKey("EDbZNc21p9d9UqjuuCLVhXizqn5B4b7rJEcer4rWMs6H");
+               const configAddress = new PublicKey("ErWtZUSLkr9RPKrhVGY59mD8S682a6xh6atfFrg25bXB");
             
             const poolFees = await clientInstance.state.getPoolsFeesByConfig(configAddress);
             setFees(poolFees);
